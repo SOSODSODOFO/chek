@@ -8,13 +8,33 @@ using System.Linq;
 using System.Management;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
 
 namespace CS2Scanner
 {
     public class SystemInfoCollector
     {
-        private static readonly string[] SuspiciousProcessKeywords = new[] { "cheat", "hack", "inject", "trainer", "bypass", "loader", "radar" };
-        private static readonly string[] SuspiciousFileKeywords = new[] { "cheat", "inject", "hack", "trainer", "radar", "aim", "wall" };
+        private static readonly string[] SuspiciousProcessKeywords = new[]
+        {
+            "cheat", "hack", "inject", "trainer", "bypass", "loader", "radar", "xenos",
+            "x64dbg", "x32dbg", "aimbot", "wallhack", "trigger", "macro", "spoof", "rage",
+            "silent", "esp", "no recoil", "bhop", "script"
+        };
+
+        private static readonly string[] SuspiciousFileKeywords = new[]
+        {
+            "cheat", "inject", "hack", "trainer", "radar", "aim", "wall", "esp", "macro",
+            "trigger", "bypass", "spoof", "rage", "silent", "loader", "injector", "xenos",
+            "x64dbg", "x32dbg", "ragebot"
+        };
+
+        private static readonly string[] SuspiciousFileExtensions = new[]
+        {
+            ".exe", ".dll", ".sys", ".asi", ".zip", ".rar", ".7z", ".tar", ".gz",
+            ".bat", ".cmd", ".ps1", ".vbs", ".cfg", ".ini", ".json", ".txt"
+        };
+
         private static readonly string[] RegistryPathsToCheck = new[]
         {
             @"Software\\Cheat Engine",
@@ -22,6 +42,23 @@ namespace CS2Scanner
             @"Software\\GameTrainer",
             @"SOFTWARE\\Cheat Engine",
             @"SOFTWARE\\Wow6432Node\\Cheat Engine"
+        };
+
+        private static readonly (RegistryHive Hive, string Path)[] RegistryValueLocations = new[]
+        {
+            (RegistryHive.CurrentUser, @"Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            (RegistryHive.CurrentUser, @"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"),
+            (RegistryHive.LocalMachine, @"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            (RegistryHive.LocalMachine, @"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce"),
+            (RegistryHive.LocalMachine, @"SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            (RegistryHive.LocalMachine, @"SOFTWARE\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\RunOnce")
+        };
+
+        private static readonly string[] RegistryValueKeywords = new[]
+        {
+            "cheat", "hack", "inject", "trainer", "radar", "aim", "wall", "esp", "macro",
+            "trigger", "bypass", "spoof", "rage", "silent", "loader", "injector", "xenos",
+            "x64dbg", "x32dbg"
         };
 
         public ReportData Collect()
@@ -50,6 +87,8 @@ namespace CS2Scanner
             report.SuspiciousRegistry = suspiciousRegistry.Count == 0
                 ? new List<string> { "Нет" }
                 : suspiciousRegistry;
+
+            report.NvidiaDrsEntries = ParseNvidiaDrsEntries();
 
             bool hasSuspiciousData = suspiciousProcesses.Any(sp => !string.Equals(sp, "Нет", StringComparison.OrdinalIgnoreCase))
                 || suspiciousFiles.Count > 0
@@ -306,7 +345,8 @@ namespace CS2Scanner
         private static List<SuspiciousFile> FindSuspiciousFiles()
         {
             var results = new List<SuspiciousFile>();
-            var candidateDirectories = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var candidateDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             void AddIfExists(string? path)
             {
@@ -322,49 +362,62 @@ namespace CS2Scanner
             if (!string.IsNullOrWhiteSpace(userProfile))
             {
                 AddIfExists(Path.Combine(userProfile, "Downloads"));
+                AddIfExists(Path.Combine(userProfile, "Desktop"));
+                AddIfExists(Path.Combine(userProfile, "Documents"));
+                AddIfExists(Path.Combine(userProfile, "AppData", "Local"));
+                AddIfExists(Path.Combine(userProfile, "AppData", "LocalLow"));
+                AddIfExists(Path.Combine(userProfile, "AppData", "Roaming"));
+                AddIfExists(Path.Combine(userProfile, "AppData", "Local", "Temp"));
             }
 
-            foreach (var dir in candidateDirectories.Distinct())
+            foreach (var dir in candidateDirectories)
             {
-                try
+                foreach (var file in EnumerateFilesSafe(dir, maxDepth: 2))
                 {
-                    foreach (var file in Directory.EnumerateFiles(dir, "*.*", SearchOption.TopDirectoryOnly))
-                    {
-                        string name = Path.GetFileName(file);
-                        string lowerName = name.ToLowerInvariant();
+                    string lowerPath = file.ToLowerInvariant();
+                    string name = Path.GetFileName(file);
+                    string lowerName = name.ToLowerInvariant();
+                    string extension = Path.GetExtension(file).ToLowerInvariant();
 
-                        if (!lowerName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
-                            !lowerName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
-                            !lowerName.EndsWith(".sys", StringComparison.OrdinalIgnoreCase))
+                    bool hasKeyword = SuspiciousFileKeywords.Any(k => lowerName.Contains(k) || lowerPath.Contains(k));
+                    if (!hasKeyword)
+                    {
+                        if (!SuspiciousFileExtensions.Contains(extension))
                         {
                             continue;
                         }
 
-                        if (SuspiciousFileKeywords.Any(k => lowerName.Contains(k)))
+                        string? directoryName = Path.GetDirectoryName(file);
+                        string lowerDirectory = directoryName?.ToLowerInvariant() ?? string.Empty;
+                        hasKeyword = SuspiciousFileKeywords.Any(k => lowerDirectory.Contains(k));
+                        if (!hasKeyword)
                         {
-                            try
-                            {
-                                var info = new FileInfo(file);
-                                results.Add(new SuspiciousFile
-                                {
-                                    Name = file,
-                                    Size = FormatFileSize(info.Length)
-                                });
-                            }
-                            catch
-                            {
-                                results.Add(new SuspiciousFile
-                                {
-                                    Name = file,
-                                    Size = "—"
-                                });
-                            }
+                            continue;
                         }
                     }
-                }
-                catch
-                {
-                    // ignore directory errors
+
+                    if (!seen.Add(file))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        var info = new FileInfo(file);
+                        results.Add(new SuspiciousFile
+                        {
+                            Name = file,
+                            Size = FormatFileSize(info.Length)
+                        });
+                    }
+                    catch
+                    {
+                        results.Add(new SuspiciousFile
+                        {
+                            Name = file,
+                            Size = "—"
+                        });
+                    }
                 }
             }
 
@@ -385,6 +438,11 @@ namespace CS2Scanner
                 {
                     result.Add($"HKLM\\{path}");
                 }
+            }
+
+            foreach (var (hive, path) in RegistryValueLocations)
+            {
+                result.AddRange(FindSuspiciousRegistryValues(hive, path));
             }
 
             return result;
@@ -414,6 +472,234 @@ namespace CS2Scanner
             {
                 return false;
             }
+        }
+
+        private static IEnumerable<string> FindSuspiciousRegistryValues(RegistryHive hive, string path)
+        {
+            var matches = new List<string>();
+
+            try
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry64);
+                using var key = baseKey.OpenSubKey(path);
+                if (key != null)
+                {
+                    matches.AddRange(InspectRegistryValues(key, hive, path));
+                }
+            }
+            catch
+            {
+                // ignore registry access errors
+            }
+
+            try
+            {
+                using var baseKey = RegistryKey.OpenBaseKey(hive, RegistryView.Registry32);
+                using var key = baseKey.OpenSubKey(path);
+                if (key != null)
+                {
+                    matches.AddRange(InspectRegistryValues(key, hive, path));
+                }
+            }
+            catch
+            {
+                // ignore registry access errors
+            }
+
+            return matches;
+        }
+
+        private static IEnumerable<string> InspectRegistryValues(RegistryKey key, RegistryHive hive, string path)
+        {
+            var matches = new List<string>();
+            foreach (var valueName in key.GetValueNames())
+            {
+                string lowerName = valueName.ToLowerInvariant();
+                string valueData = key.GetValue(valueName)?.ToString()?.ToLowerInvariant() ?? string.Empty;
+
+                if (RegistryValueKeywords.Any(k => lowerName.Contains(k) || valueData.Contains(k)))
+                {
+                    matches.Add($"{GetRegistryHivePrefix(hive)}\\{path}\\{valueName}");
+                }
+            }
+
+            return matches;
+        }
+
+        private static string GetRegistryHivePrefix(RegistryHive hive)
+        {
+            return hive switch
+            {
+                RegistryHive.CurrentUser => "HKCU",
+                RegistryHive.LocalMachine => "HKLM",
+                RegistryHive.Users => "HKU",
+                RegistryHive.ClassesRoot => "HKCR",
+                RegistryHive.CurrentConfig => "HKCC",
+                _ => hive.ToString()
+            };
+        }
+
+        private static IEnumerable<string> EnumerateFilesSafe(string root, int maxDepth)
+        {
+            var stack = new Stack<(string path, int depth)>();
+            stack.Push((root, 0));
+
+            while (stack.Count > 0)
+            {
+                var (current, depth) = stack.Pop();
+                string[] files = Array.Empty<string>();
+                try
+                {
+                    files = Directory.GetFiles(current);
+                }
+                catch
+                {
+                    // ignore
+                }
+
+                foreach (var file in files)
+                {
+                    yield return file;
+                }
+
+                if (depth >= maxDepth)
+                {
+                    continue;
+                }
+
+                string[] directories;
+                try
+                {
+                    directories = Directory.GetDirectories(current);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                foreach (var directory in directories)
+                {
+                    stack.Push((directory, depth + 1));
+                }
+            }
+        }
+
+        private static IReadOnlyList<NvidiaDrsEntry> ParseNvidiaDrsEntries()
+        {
+            var entries = new List<NvidiaDrsEntry>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                string commonData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+                if (string.IsNullOrWhiteSpace(commonData))
+                {
+                    return entries;
+                }
+
+                string drsPath = Path.Combine(commonData, "NVIDIA Corporation", "Drs", "nvAppTimestamps");
+                if (!File.Exists(drsPath))
+                {
+                    return entries;
+                }
+
+                byte[] bytes = File.ReadAllBytes(drsPath);
+                if (bytes.Length == 0)
+                {
+                    return entries;
+                }
+
+                var tokens = ExtractAsciiTokens(bytes);
+                string? lastLabel = null;
+                var pathRegex = new Regex(@"(//\?/)?[a-zA-Z]:/[^\s\r\n]+", RegexOptions.IgnoreCase);
+
+                foreach (string token in tokens)
+                {
+                    if (string.IsNullOrWhiteSpace(token))
+                    {
+                        continue;
+                    }
+
+                    var match = pathRegex.Match(token);
+                    if (match.Success)
+                    {
+                        string rawPath = match.Value;
+                        string normalizedPath = NormalizePathForDisplay(rawPath);
+                        if (!seen.Add(normalizedPath))
+                        {
+                            lastLabel = null;
+                            continue;
+                        }
+
+                        string prefix = token.Substring(0, match.Index).Trim();
+                        string label = string.IsNullOrEmpty(prefix) ? lastLabel ?? "—" : prefix;
+
+                        entries.Add(new NvidiaDrsEntry
+                        {
+                            Label = label,
+                            Value = normalizedPath
+                        });
+
+                        lastLabel = null;
+                    }
+                    else if (token.Any(char.IsLetterOrDigit) && token.Length < 256)
+                    {
+                        lastLabel = token.Trim();
+                    }
+                }
+            }
+            catch
+            {
+                // ignore parsing errors
+            }
+
+            return entries;
+        }
+
+        private static List<string> ExtractAsciiTokens(byte[] bytes)
+        {
+            var tokens = new List<string>();
+            var builder = new StringBuilder();
+
+            foreach (byte b in bytes)
+            {
+                if (b >= 32 && b <= 126)
+                {
+                    builder.Append((char)b);
+                }
+                else
+                {
+                    if (builder.Length > 0)
+                    {
+                        tokens.Add(builder.ToString());
+                        builder.Clear();
+                    }
+                }
+            }
+
+            if (builder.Length > 0)
+            {
+                tokens.Add(builder.ToString());
+            }
+
+            return tokens;
+        }
+
+        private static string NormalizePathForDisplay(string rawPath)
+        {
+            string normalized = rawPath.Replace('/', '\\');
+
+            if (normalized.StartsWith("\\\\?\\", StringComparison.Ordinal))
+            {
+                normalized = normalized.Substring(4);
+            }
+
+            if (normalized.Length >= 2 && normalized[1] == ':')
+            {
+                normalized = char.ToUpperInvariant(normalized[0]) + normalized.Substring(1);
+            }
+
+            return normalized;
         }
 
         private static string FormatFileSize(long bytes)

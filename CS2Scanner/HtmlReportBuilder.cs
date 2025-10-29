@@ -23,6 +23,7 @@ namespace CS2Scanner
             string fileRows = BuildFileRows(data.SuspiciousFiles);
             string registryRows = BuildRows(data.SuspiciousRegistry.Select(WebUtility.HtmlEncode), singleColumn: true);
             string processRows = BuildProcessRows(data.Processes);
+            string nvidiaDrsRows = BuildNvidiaDrsRows(data.NvidiaDrsEntries);
 
             string judgementClass = data.Judgement.Contains("Clean", StringComparison.OrdinalIgnoreCase) ? "clean" : "cheating";
 
@@ -40,7 +41,8 @@ namespace CS2Scanner
                 .Replace("{{CheatProcessRows}}", cheatProcessRows)
                 .Replace("{{SuspiciousFileRows}}", fileRows)
                 .Replace("{{SuspiciousRegistryRows}}", registryRows)
-                .Replace("{{AllProcessRows}}", processRows);
+                .Replace("{{AllProcessRows}}", processRows)
+                .Replace("{{NvidiaDrsRows}}", nvidiaDrsRows);
         }
 
         private static string BuildRows(IEnumerable<string> values, bool singleColumn)
@@ -96,6 +98,25 @@ namespace CS2Scanner
                 sb.Append("<td>").Append(process.Pid).Append("</td>");
                 sb.Append("<td>").Append(WebUtility.HtmlEncode(process.Path)).Append("</td>");
                 sb.Append("<td>").Append(process.MemoryMb.ToString("F1")).Append("</td>");
+                sb.Append("</tr>");
+            }
+
+            return sb.ToString();
+        }
+
+        private static string BuildNvidiaDrsRows(IReadOnlyList<NvidiaDrsEntry> entries)
+        {
+            if (entries.Count == 0)
+            {
+                return "<tr><td colspan=\"2\">Нет</td></tr>";
+            }
+
+            var sb = new StringBuilder();
+            foreach (var entry in entries)
+            {
+                sb.Append("<tr>");
+                sb.Append("<td>").Append(WebUtility.HtmlEncode(entry.Label)).Append("</td>");
+                sb.Append("<td>").Append(WebUtility.HtmlEncode(entry.Value)).Append("</td>");
                 sb.Append("</tr>");
             }
 

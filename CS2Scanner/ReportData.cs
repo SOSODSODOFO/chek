@@ -17,6 +17,7 @@ namespace CS2Scanner
         public IReadOnlyList<SuspiciousFile> SuspiciousFiles { get; set; } = new List<SuspiciousFile>();
         public IReadOnlyList<string> SuspiciousRegistry { get; set; } = new List<string>();
         public IReadOnlyList<ProcessDetails> Processes { get; set; } = new List<ProcessDetails>();
+        public IReadOnlyList<NvidiaDrsEntry> NvidiaDrsEntries { get; set; } = new List<NvidiaDrsEntry>();
     }
 
     public class SuspiciousFile
@@ -31,5 +32,11 @@ namespace CS2Scanner
         public int Pid { get; set; }
         public string Path { get; set; } = string.Empty;
         public double MemoryMb { get; set; }
+    }
+
+    public class NvidiaDrsEntry
+    {
+        public string Label { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
     }
 }
