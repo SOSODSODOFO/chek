@@ -76,6 +76,23 @@ namespace CS2Scanner
 
         private async Task StartScanAsync()
         {
+            if (!_codeVerified)
+            {
+                if (introPanel.Visible)
+                {
+                    codeStatusLabel.ForeColor = Color.FromArgb(230, 120, 120);
+                    codeStatusLabel.Text = "Сначала подтвердите код, отправленный администратором.";
+                    codeTextBox.Focus();
+                    codeTextBox.SelectAll();
+                }
+                else
+                {
+                    statusLabel.Text = "Доступ не подтверждён. Вернитесь на предыдущий экран и введите код.";
+                }
+
+                return;
+            }
+
             if (_scanInProgress)
             {
                 return;
