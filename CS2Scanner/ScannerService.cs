@@ -146,7 +146,12 @@ internal sealed class ScannerService
         try
         {
             using var ramSearcher = new ManagementObjectSearcher("SELECT Capacity FROM Win32_PhysicalMemory");
-            var totalBytes = ramSearcher.Get().OfType<ManagementObject>().Select(mo => Convert.ToUInt64(mo["Capacity"] ?? 0)).Sum();
+            ulong totalBytes = 0;
+            foreach (var module in ramSearcher.Get().OfType<ManagementObject>())
+            {
+                totalBytes += Convert.ToUInt64(module["Capacity"] ?? 0);
+            }
+
             ram = FormatBytes(totalBytes);
         }
         catch
